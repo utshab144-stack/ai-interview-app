@@ -131,7 +131,7 @@ export default function InterviewApp() {
               AI Interview App
             </h1>
             <p className="text-gray-300 text-lg">
-              Practice your interview skills with AI-powered feedback.
+              Practice smarter interviews with AI-powered feedback.
             </p>
           </div>
           <div className="space-y-6">
@@ -185,7 +185,7 @@ export default function InterviewApp() {
                   <span>Starting...</span>
                 </div>
               ) : (
-                '🚀 Start your Interview'
+                'Start Interview'
               )}
             </button>
           </div>
