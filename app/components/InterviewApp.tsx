@@ -107,7 +107,7 @@ export default function InterviewApp() {
                   <span>Starting...</span>
                 </div>
               ) : (
-                '🚀 Start Interview'
+                '🚀 Start your Interview'
               )}
             </button>
           </div>
