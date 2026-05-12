@@ -1,12 +1,100 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import type { TextItem } from 'pdfjs-dist/types/src/display/api';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
-export async function generateQuestion(jobRole: string, previousQuestions: string[] = []) {
+export async function generateResumeSummary(resumeContent: string): Promise<string> {
   try {
     const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
-    const prompt = `Generate one thoughtful interview question for a ${jobRole} position. Make it relevant to the role and avoid repeating these previous questions: ${previousQuestions.join(', ')}. Keep it concise.`;
+    const prompt = `Create a concise summary of this resume, highlighting the candidate's key skills, experience, education, and notable achievements. Keep it under 300 words and focus on information relevant for job interviews.
+
+Resume content:
+${resumeContent.substring(0, 3000)}`; // Limit to first 3000 chars
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    return response.text().trim();
+  } catch (error) {
+    console.error('Error generating resume summary:', error);
+    // Fallback: return first 500 characters of resume as summary
+    return resumeContent.substring(0, 500) + (resumeContent.length > 500 ? '...' : '');
+  }
+}
+
+export async function parseResume(file: File): Promise<string> {
+  try {
+    // Dynamically import the legacy browser build of pdfjs-dist
+    // @ts-ignore
+    const pdfjsLib = (await import('pdfjs-dist/legacy/build/pdf.mjs')) as any;
+
+    // Set the worker source to the local public worker file
+    if (typeof window !== 'undefined') {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+    }
+
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+    let fullText = '';
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = (textContent.items as any[])
+        .filter((item: any): item is TextItem => 'str' in item)
+        .map((item) => item.str)
+        .join(' ');
+      fullText += pageText + '\n';
+    }
+
+    // Clean up the text
+    const cleanedText = fullText
+      .replace(/\n+/g, ' ') // Replace multiple newlines with single space
+      .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+      .trim();
+
+    if (cleanedText.length < 50) {
+      throw new Error('The PDF appears to contain very little text. Please ensure it contains readable text content. If you are uploading a scanned resume, use a text-based PDF instead.');
+    }
+
+    return cleanedText;
+  } catch (error) {
+    console.error('Error parsing PDF:', error);
+
+    // Provide more specific error messages
+    if (error instanceof Error) {
+      const message = error.message;
+      if (message.includes('InvalidPDFException')) {
+        throw new Error('The uploaded file is not a valid PDF. Please upload a valid PDF file.');
+      }
+      if (message.includes('MissingPDFException')) {
+        throw new Error('The PDF file appears to be corrupted. Please try with a different PDF file.');
+      }
+      if (message.includes('UnexpectedResponseException')) {
+        throw new Error('Unable to read the PDF file. Please ensure the file is not password-protected and try again.');
+      }
+      if (message.includes('Failed to fetch') || message.includes('NetworkError')) {
+        throw new Error('Unable to load the PDF worker. Please refresh the page and try again.');
+      }
+    }
+
+    throw new Error('Failed to parse resume PDF. Please ensure it\'s a valid text-based PDF resume, not a scanned image-only PDF.');
+  }
+}
+
+export async function generateQuestion(jobRole: string, previousQuestions: string[] = [], resumeContent?: string) {
+  try {
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+
+    let prompt = `Generate one thoughtful interview question for a ${jobRole} position. Make it relevant to the role and avoid repeating these previous questions: ${previousQuestions.join(', ')}. Keep it concise.`;
+
+    if (resumeContent) {
+      prompt = `Based on this resume summary, generate one thoughtful interview question for a ${jobRole} position that references the candidate's actual experience, skills, projects, or achievements mentioned in the summary. Make the question specific to their background and avoid generic questions. Avoid repeating these previous questions: ${previousQuestions.join(', ')}. Keep it concise.
+
+Resume Summary:
+${resumeContent}`; // resumeContent is now the summary
+    }
 
     const result = await model.generateContent(prompt);
     const response = await result.response;

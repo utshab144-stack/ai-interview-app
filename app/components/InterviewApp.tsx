@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { generateQuestion, evaluateAnswer } from '../actions';
+import { generateQuestion, evaluateAnswer, parseResume, generateResumeSummary } from '../actions';
 
 interface Question {
   text: string;
@@ -11,11 +11,15 @@ interface Question {
 
 export default function InterviewApp() {
   const [jobRole, setJobRole] = useState('');
+  const [resumeFile, setResumeFile] = useState<File | null>(null);
+  const [resumeContent, setResumeContent] = useState<string>('');
+  const [resumeSummary, setResumeSummary] = useState<string>('');
   const [isStarted, setIsStarted] = useState(false);
   const [currentQuestion, setCurrentQuestion] = useState('');
   const [userAnswer, setUserAnswer] = useState('');
   const [questions, setQuestions] = useState<Question[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isParsingResume, setIsParsingResume] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   const [questionIndex, setQuestionIndex] = useState(0);
 
@@ -24,13 +28,52 @@ export default function InterviewApp() {
     setIsStarted(true);
     setIsLoading(true);
     try {
-      const question = await generateQuestion(jobRole);
+      const question = await generateQuestion(jobRole, [], resumeSummary);
       setCurrentQuestion(question);
     } catch (error) {
       console.error('Error generating question:', error);
       setCurrentQuestion('Sorry, there was an error generating a question. Please try again.');
     }
     setIsLoading(false);
+  };
+
+  const handleResumeUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (file.type !== 'application/pdf') {
+      alert('Please upload a PDF file.');
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) { // 10MB limit
+      alert('File size must be less than 10MB.');
+      return;
+    }
+
+    setResumeFile(file);
+    setIsParsingResume(true);
+
+    try {
+      const content = await parseResume(file);
+      setResumeContent(content);
+      
+      // Generate resume summary for better question targeting
+      const summary = await generateResumeSummary(content);
+      setResumeSummary(summary);
+      
+      alert('Resume uploaded and analyzed successfully! Questions will be tailored to your experience.');
+    } catch (error) {
+      console.error('Error parsing resume:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to parse the resume. Please try again with a different PDF.';
+      alert(errorMessage);
+      setResumeFile(null);
+      setResumeContent('');
+      // Reset the file input
+      event.target.value = '';
+    } finally {
+      setIsParsingResume(false);
+    }
   };
 
   const submitAnswer = async () => {
@@ -57,7 +100,7 @@ export default function InterviewApp() {
     setShowFeedback(false);
     try {
       const previousQuestions = questions.map(q => q.text);
-      const question = await generateQuestion(jobRole, previousQuestions);
+      const question = await generateQuestion(jobRole, previousQuestions, resumeSummary);
       setCurrentQuestion(question);
     } catch (error) {
       console.error('Error generating question:', error);
@@ -68,6 +111,9 @@ export default function InterviewApp() {
 
   const resetInterview = () => {
     setJobRole('');
+    setResumeFile(null);
+    setResumeContent('');
+    setResumeSummary('');
     setIsStarted(false);
     setCurrentQuestion('');
     setUserAnswer('');
@@ -96,9 +142,41 @@ export default function InterviewApp() {
               onChange={(e) => setJobRole(e.target.value)}
               className="w-full p-3 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-700 text-white placeholder-gray-400"
             />
+            
+            <div className="space-y-3">
+              <label className="block text-sm font-medium text-gray-300">
+                📄 Optional: Upload your resume (PDF) for personalized questions
+              </label>
+              <input
+                type="file"
+                accept=".pdf"
+                onChange={handleResumeUpload}
+                disabled={isLoading || isParsingResume}
+                className="w-full p-3 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-700 text-white file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 disabled:opacity-50"
+              />
+              {isParsingResume && (
+                <p className="text-blue-400 text-sm mt-2">
+                  🔄 Parsing resume... This may take a few seconds.
+                </p>
+              )}
+              {resumeFile && (
+                <>
+                  <p className="text-green-400 text-sm">
+                    ✅ Resume uploaded: {resumeFile.name}
+                  </p>
+                  {resumeSummary && (
+                    <div className="mt-3 p-3 bg-gray-700 rounded-lg border border-gray-600">
+                      <p className="text-gray-300 text-sm font-medium mb-2">📋 Resume Summary:</p>
+                      <p className="text-gray-400 text-sm leading-relaxed">{resumeSummary}</p>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            
             <button
               onClick={startInterview}
-              disabled={!jobRole.trim() || isLoading}
+              disabled={!jobRole.trim() || isLoading || isParsingResume}
               className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-4 rounded-xl hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 font-semibold text-lg shadow-lg hover:shadow-xl"
             >
               {isLoading ? (
@@ -124,7 +202,10 @@ export default function InterviewApp() {
             <h1 className="text-4xl font-bold text-slate-200">
               Interview for {jobRole}
             </h1>
-            <p className="text-gray-400 mt-1">Question {questionIndex + 1}</p>
+            <p className="text-gray-400 mt-1">
+              Question {questionIndex + 1}
+              {resumeFile && <span className="ml-4 text-green-400">📄 Resume-based questions</span>}
+            </p>
           </div>
           <button
             onClick={resetInterview}
