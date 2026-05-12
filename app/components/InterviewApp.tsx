@@ -1,53 +1,55 @@
 'use client';
 
 import { useState } from 'react';
-import { generateQuestion, evaluateAnswer, parseResume, generateResumeSummary } from '../actions';
-
-interface Question {
-  text: string;
-  answer: string;
-  feedback: string;
-}
+import {
+  compareResumeToJob,
+  parseResume,
+  validateHrLogin,
+  type ResumeComparison,
+} from '../actions';
 
 export default function InterviewApp() {
-  const [jobRole, setJobRole] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [loginError, setLoginError] = useState('');
   const [resumeFile, setResumeFile] = useState<File | null>(null);
-  const [resumeContent, setResumeContent] = useState<string>('');
-  const [resumeSummary, setResumeSummary] = useState<string>('');
-  const [isStarted, setIsStarted] = useState(false);
-  const [currentQuestion, setCurrentQuestion] = useState('');
-  const [userAnswer, setUserAnswer] = useState('');
-  const [questions, setQuestions] = useState<Question[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [resumeContent, setResumeContent] = useState('');
+  const [jobDescription, setJobDescription] = useState('');
+  const [comparison, setComparison] = useState<ResumeComparison | null>(null);
   const [isParsingResume, setIsParsingResume] = useState(false);
-  const [showFeedback, setShowFeedback] = useState(false);
-  const [questionIndex, setQuestionIndex] = useState(0);
+  const [isComparing, setIsComparing] = useState(false);
+  const [error, setError] = useState('');
 
-  const startInterview = async () => {
-    if (!jobRole.trim()) return;
-    setIsStarted(true);
-    setIsLoading(true);
-    try {
-      const question = await generateQuestion(jobRole, [], resumeSummary);
-      setCurrentQuestion(question);
-    } catch (error) {
-      console.error('Error generating question:', error);
-      setCurrentQuestion('Sorry, there was an error generating a question. Please try again.');
+  const handleLogin = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setLoginError('');
+
+    const isValid = await validateHrLogin(email, password);
+    if (!isValid) {
+      setLoginError('Invalid HR credentials. Try hr@example.com / password123 for local testing.');
+      return;
     }
-    setIsLoading(false);
+
+    setIsLoggedIn(true);
   };
 
   const handleResumeUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
+    setError('');
+    setComparison(null);
+
     if (!file) return;
 
     if (file.type !== 'application/pdf') {
-      alert('Please upload a PDF file.');
+      setError('Please upload a PDF resume.');
+      event.target.value = '';
       return;
     }
 
-    if (file.size > 10 * 1024 * 1024) { // 10MB limit
-      alert('File size must be less than 10MB.');
+    if (file.size > 10 * 1024 * 1024) {
+      setError('Resume file size must be less than 10MB.');
+      event.target.value = '';
       return;
     }
 
@@ -57,249 +59,343 @@ export default function InterviewApp() {
     try {
       const content = await parseResume(file);
       setResumeContent(content);
-      
-      // Generate resume summary for better question targeting
-      const summary = await generateResumeSummary(content);
-      setResumeSummary(summary);
-      
-      alert('Resume uploaded and analyzed successfully! Questions will be tailored to your experience.');
-    } catch (error) {
-      console.error('Error parsing resume:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Failed to parse the resume. Please try again with a different PDF.';
-      alert(errorMessage);
+    } catch (uploadError) {
+      const message = uploadError instanceof Error ? uploadError.message : 'Unable to parse this resume.';
+      setError(message);
       setResumeFile(null);
       setResumeContent('');
-      // Reset the file input
       event.target.value = '';
     } finally {
       setIsParsingResume(false);
     }
   };
 
-  const submitAnswer = async () => {
-    if (!userAnswer.trim()) return;
-    setIsLoading(true);
-    try {
-      const feedback = await evaluateAnswer(currentQuestion, userAnswer);
-      const newQuestion: Question = {
-        text: currentQuestion,
-        answer: userAnswer,
-        feedback,
-      };
-      setQuestions([...questions, newQuestion]);
-      setUserAnswer('');
-      setShowFeedback(true);
-    } catch (error) {
-      console.error('Error evaluating answer:', error);
+  const handleCompare = async () => {
+    setError('');
+    setComparison(null);
+
+    if (!resumeContent) {
+      setError('Upload a resume before running the comparison.');
+      return;
     }
-    setIsLoading(false);
+
+    if (!jobDescription.trim()) {
+      setError('Paste a job description before running the comparison.');
+      return;
+    }
+
+    setIsComparing(true);
+    try {
+      const result = await compareResumeToJob(resumeContent, jobDescription);
+      setComparison(result);
+    } catch (compareError) {
+      const message = compareError instanceof Error ? compareError.message : 'Comparison failed.';
+      setError(message);
+    } finally {
+      setIsComparing(false);
+    }
   };
 
-  const nextQuestion = async () => {
-    setIsLoading(true);
-    setShowFeedback(false);
-    try {
-      const previousQuestions = questions.map(q => q.text);
-      const question = await generateQuestion(jobRole, previousQuestions, resumeSummary);
-      setCurrentQuestion(question);
-    } catch (error) {
-      console.error('Error generating question:', error);
-      setCurrentQuestion('Sorry, there was an error generating a question. Please try again.');
-    }
-    setIsLoading(false);
-  };
-
-  const resetInterview = () => {
-    setJobRole('');
+  const resetReview = () => {
     setResumeFile(null);
     setResumeContent('');
-    setResumeSummary('');
-    setIsStarted(false);
-    setCurrentQuestion('');
-    setUserAnswer('');
-    setQuestions([]);
-    setShowFeedback(false);
-    setQuestionIndex(0);
+    setJobDescription('');
+    setComparison(null);
+    setError('');
   };
 
-  if (!isStarted) {
+  if (!isLoggedIn) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-slate-900 to-gray-800 flex items-center justify-center p-4">
-        <div className="max-w-lg w-full bg-gray-800 rounded-2xl shadow-2xl border border-gray-700 space-y-8 p-8">
-          <div className="text-center">
-            <h1 className="text-5xl font-bold text-blue-400 mb-2">
-              AI Interview App
-            </h1>
-            <p className="text-gray-300 text-lg">
-              Practice smarter interviews with AI-powered feedback.
-            </p>
-          </div>
-          <div className="space-y-6">
-            <input
-              type="text"
-              placeholder="Enter your job role (e.g., Software Engineer)"
-              value={jobRole}
-              onChange={(e) => setJobRole(e.target.value)}
-              className="w-full p-3 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-700 text-white placeholder-gray-400"
-            />
-            
-            <div className="space-y-3">
-              <label className="block text-sm font-medium text-gray-300">
-                📄 Optional: Upload your resume (PDF) for personalized questions
-              </label>
-              <input
-                type="file"
-                accept=".pdf"
-                onChange={handleResumeUpload}
-                disabled={isLoading || isParsingResume}
-                className="w-full p-3 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-700 text-white file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 disabled:opacity-50"
-              />
-              {isParsingResume && (
-                <p className="text-blue-400 text-sm mt-2">
-                  🔄 Parsing resume... This may take a few seconds.
+      <main className="min-h-screen bg-slate-950 text-slate-100">
+        <div className="mx-auto flex min-h-screen w-full max-w-6xl items-center px-6 py-10">
+          <div className="grid w-full gap-10 lg:grid-cols-[1fr_420px] lg:items-center">
+            <section className="space-y-6">
+              <p className="text-sm font-semibold uppercase tracking-widest text-cyan-300">
+                HR Assistant
+              </p>
+              <div className="space-y-4">
+                <h1 className="max-w-3xl text-5xl font-bold leading-tight text-white md:text-6xl">
+                  Screen resumes against job descriptions with AI support.
+                </h1>
+                <p className="max-w-2xl text-lg leading-8 text-slate-300">
+                  Upload a candidate resume, paste the role requirements, and get a clear fit score,
+                  skill match, gaps, and interview prompts for the hiring conversation.
+                </p>
+              </div>
+              <div className="grid max-w-2xl gap-3 sm:grid-cols-3">
+                {['Fit score', 'Skill gaps', 'Interview prompts'].map((item) => (
+                  <div key={item} className="rounded-lg border border-slate-700 bg-slate-900/80 p-4">
+                    <p className="text-sm font-medium text-slate-200">{item}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <form
+              onSubmit={handleLogin}
+              className="rounded-lg border border-slate-700 bg-slate-900 p-6 shadow-2xl"
+            >
+              <div className="mb-6">
+                <h2 className="text-2xl font-semibold text-white">HR Login</h2>
+                <p className="mt-2 text-sm text-slate-400">
+                  Use the local demo credentials unless environment credentials are configured.
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                <label className="block">
+                  <span className="text-sm font-medium text-slate-300">Email</span>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-800 px-4 py-3 text-white outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20"
+                    placeholder="hr@example.com"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="text-sm font-medium text-slate-300">Password</span>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-800 px-4 py-3 text-white outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20"
+                    placeholder="password123"
+                  />
+                </label>
+              </div>
+
+              {loginError && (
+                <p className="mt-4 rounded-lg border border-red-800 bg-red-950 px-4 py-3 text-sm text-red-200">
+                  {loginError}
                 </p>
               )}
-              {resumeFile && (
-                <>
-                  <p className="text-green-400 text-sm">
-                    ✅ Resume uploaded: {resumeFile.name}
-                  </p>
-                  {resumeSummary && (
-                    <div className="mt-3 p-3 bg-gray-700 rounded-lg border border-gray-600">
-                      <p className="text-gray-300 text-sm font-medium mb-2">📋 Resume Summary:</p>
-                      <p className="text-gray-400 text-sm leading-relaxed">{resumeSummary}</p>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-            
-            <button
-              onClick={startInterview}
-              disabled={!jobRole.trim() || isLoading || isParsingResume}
-              className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-4 rounded-xl hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 font-semibold text-lg shadow-lg hover:shadow-xl"
-            >
-              {isLoading ? (
-                <div className="flex items-center justify-center space-x-2">
-                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                  <span>Starting...</span>
-                </div>
-              ) : (
-                'Start Interview'
-              )}
-            </button>
+
+              <button
+                type="submit"
+                className="mt-6 w-full rounded-lg bg-cyan-400 px-5 py-3 font-semibold text-slate-950 transition hover:bg-cyan-300"
+              >
+                Sign In
+              </button>
+            </form>
           </div>
         </div>
-      </div>
+      </main>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-slate-900 to-gray-800 p-4">
-      <div className="max-w-6xl mx-auto">
-        <div className="flex justify-between items-center mb-8 bg-gray-800 rounded-2xl p-6 shadow-lg border border-gray-700">
+    <main className="min-h-screen bg-slate-950 text-slate-100">
+      <div className="mx-auto w-full max-w-7xl px-6 py-8">
+        <header className="mb-8 flex flex-col gap-4 border-b border-slate-800 pb-6 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-4xl font-bold text-slate-200">
-              Interview for {jobRole}
-            </h1>
-            <p className="text-gray-400 mt-1">
-              Question {questionIndex + 1}
-              {resumeFile && <span className="ml-4 text-green-400">📄 Resume-based questions</span>}
+            <p className="text-sm font-semibold uppercase tracking-widest text-cyan-300">
+              HR Assistant
+            </p>
+            <h1 className="mt-2 text-4xl font-bold text-white">Candidate Match Review</h1>
+            <p className="mt-2 text-slate-400">
+              Compare a resume with a job description and prepare a more focused shortlist.
             </p>
           </div>
           <button
-            onClick={resetInterview}
-            className="bg-gradient-to-r from-gray-500 to-gray-600 text-white px-6 py-3 rounded-xl hover:from-gray-600 hover:to-gray-700 transition-all duration-200 font-medium shadow-md hover:shadow-lg"
+            onClick={() => setIsLoggedIn(false)}
+            className="w-fit rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
           >
-            🔄 Reset
+            Sign Out
           </button>
-        </div>
+        </header>
 
-        <div className="space-y-6">
-          {questions.map((q, index) => (
-            <div key={index} className="bg-gray-800 rounded-2xl p-6 shadow-lg border border-gray-700 hover:shadow-xl transition-all duration-200">
-              <div className="flex items-start space-x-3 mb-4">
-                <span className="text-2xl">❓</span>
-                <div className="flex-1">
-                  <h3 className="font-bold text-lg text-gray-200 mb-2">Question {index + 1}:</h3>
-                  <p className="text-gray-300 mb-4 leading-relaxed">{q.text}</p>
-                  <h4 className="font-semibold text-gray-200 mb-2">💬 Your Answer:</h4>
-                  <p className="text-gray-400 mb-4 bg-gray-700 p-4 rounded-lg leading-relaxed">{q.answer}</p>
-                  <h4 className="font-semibold text-gray-200 mb-2">📊 AI Feedback:</h4>
-                  <p className="text-gray-300 whitespace-pre-wrap bg-blue-900/30 p-4 rounded-lg border-l-4 border-blue-500 leading-relaxed">{q.feedback}</p>
+        <section className="grid gap-6 lg:grid-cols-[420px_1fr]">
+          <div className="space-y-6">
+            <div className="rounded-lg border border-slate-800 bg-slate-900 p-5">
+              <h2 className="text-lg font-semibold text-white">Candidate Resume</h2>
+              <p className="mt-1 text-sm text-slate-400">Upload a text-based PDF resume.</p>
+
+              <label className="mt-5 block rounded-lg border border-dashed border-slate-600 bg-slate-800 p-5 transition hover:border-cyan-400">
+                <span className="block text-sm font-medium text-slate-200">Resume PDF</span>
+                <input
+                  type="file"
+                  accept=".pdf"
+                  onChange={handleResumeUpload}
+                  disabled={isParsingResume || isComparing}
+                  className="mt-3 w-full text-sm text-slate-300 file:mr-4 file:rounded-lg file:border-0 file:bg-cyan-400 file:px-4 file:py-2 file:font-semibold file:text-slate-950 hover:file:bg-cyan-300 disabled:opacity-50"
+                />
+              </label>
+
+              {isParsingResume && (
+                <p className="mt-3 text-sm text-cyan-300">Parsing resume...</p>
+              )}
+
+              {resumeFile && resumeContent && (
+                <div className="mt-4 rounded-lg border border-emerald-800 bg-emerald-950/60 p-4">
+                  <p className="text-sm font-medium text-emerald-200">Resume ready</p>
+                  <p className="mt-1 truncate text-sm text-emerald-300">{resumeFile.name}</p>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-slate-800 bg-slate-900 p-5">
+              <h2 className="text-lg font-semibold text-white">Job Description</h2>
+              <p className="mt-1 text-sm text-slate-400">
+                Paste the role summary, responsibilities, and required skills.
+              </p>
+              <textarea
+                value={jobDescription}
+                onChange={(event) => {
+                  setJobDescription(event.target.value);
+                  setComparison(null);
+                }}
+                rows={12}
+                className="mt-4 w-full resize-none rounded-lg border border-slate-700 bg-slate-800 px-4 py-3 text-sm leading-6 text-white outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20"
+                placeholder="Paste job description here..."
+              />
+            </div>
+
+            {error && (
+              <p className="rounded-lg border border-red-800 bg-red-950 px-4 py-3 text-sm text-red-200">
+                {error}
+              </p>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                onClick={handleCompare}
+                disabled={isParsingResume || isComparing || !resumeContent || !jobDescription.trim()}
+                className="flex-1 rounded-lg bg-cyan-400 px-5 py-3 font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isComparing ? 'Comparing...' : 'Compare Candidate'}
+              </button>
+              <button
+                onClick={resetReview}
+                className="rounded-lg border border-slate-700 px-5 py-3 font-semibold text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
+              >
+                Reset
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-5">
+            {!comparison ? (
+              <div className="flex min-h-[620px] items-center justify-center rounded-lg border border-dashed border-slate-700 bg-slate-950/50 p-8 text-center">
+                <div className="max-w-md">
+                  <h2 className="text-2xl font-semibold text-white">Ready for review</h2>
+                  <p className="mt-3 text-slate-400">
+                    Add a resume and job description to generate an AI-assisted match analysis.
+                  </p>
                 </div>
               </div>
-            </div>
-          ))}
-
-          {currentQuestion && !showFeedback && (
-            <div className="bg-gray-800 rounded-2xl p-6 shadow-lg border border-gray-700">
-              <div className="flex items-start space-x-3 mb-6">
-                <span className="text-3xl">🎯</span>
-                <div className="flex-1">
-                  <h3 className="font-bold text-xl text-gray-200 mb-3">Current Question:</h3>
-                  <p className="text-gray-300 text-lg leading-relaxed mb-6">{currentQuestion}</p>
-                  <div className="relative">
-                    <textarea
-                      value={userAnswer}
-                      onChange={(e) => setUserAnswer(e.target.value)}
-                      placeholder="Type your thoughtful answer here..."
-                      className="w-full p-4 border-2 border-gray-600 rounded-xl focus:outline-none focus:ring-4 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 bg-gray-700 resize-none text-white placeholder-gray-400"
-                      rows={6}
-                    />
-                    <div className="absolute top-4 left-4 pointer-events-none">
-                      <span className="text-gray-400">✍️</span>
-                    </div>
+            ) : (
+              <div className="space-y-6">
+                <div className="grid gap-4 md:grid-cols-[180px_1fr]">
+                  <div className="rounded-lg border border-cyan-800 bg-cyan-950/50 p-5 text-center">
+                    <p className="text-sm font-medium text-cyan-200">Fit Score</p>
+                    <p className="mt-3 text-5xl font-bold text-cyan-300">
+                      {comparison.overallScore}
+                    </p>
+                    <p className="mt-1 text-sm text-cyan-200">out of 100</p>
                   </div>
-                  <div className="flex justify-end mt-6">
-                    <button
-                      onClick={submitAnswer}
-                      disabled={!userAnswer.trim() || isLoading}
-                      className="bg-gradient-to-r from-green-500 to-emerald-600 text-white px-8 py-3 rounded-xl hover:from-green-600 hover:to-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 font-semibold text-lg shadow-lg hover:shadow-xl"
-                    >
-                      {isLoading ? (
-                        <div className="flex items-center space-x-2">
-                          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                          <span>Submitting...</span>
-                        </div>
-                      ) : (
-                        '✅ Submit Answer'
-                      )}
-                    </button>
+                  <div className="rounded-lg border border-slate-800 bg-slate-950 p-5">
+                    <p className="text-sm font-medium uppercase tracking-widest text-slate-500">
+                      Recommendation
+                    </p>
+                    <h2 className="mt-2 text-2xl font-bold text-white">
+                      {comparison.recommendation}
+                    </h2>
+                    <p className="mt-3 leading-7 text-slate-300">{comparison.summary}</p>
                   </div>
                 </div>
-              </div>
-            </div>
-          )}
 
-          {showFeedback && (
-            <div className="bg-gradient-to-r from-green-900/30 to-emerald-900/30 border border-green-700 rounded-2xl p-6 shadow-lg">
-              <div className="flex items-start space-x-3">
-                <span className="text-3xl">🎉</span>
-                <div className="flex-1">
-                  <h3 className="font-bold text-xl text-green-300 mb-3">AI Feedback on Your Answer:</h3>
-                  <p className="text-green-200 whitespace-pre-wrap text-lg leading-relaxed mb-6 bg-gray-800 p-4 rounded-lg">{questions[questions.length - 1]?.feedback}</p>
-                  <div className="flex justify-end">
-                    <button
-                      onClick={nextQuestion}
-                      disabled={isLoading}
-                      className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white px-8 py-3 rounded-xl hover:from-blue-600 hover:to-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 font-semibold text-lg shadow-lg hover:shadow-xl"
-                    >
-                      {isLoading ? (
-                        <div className="flex items-center space-x-2">
-                          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                          <span>Generating...</span>
-                        </div>
-                      ) : (
-                        '➡️ Next Question'
-                      )}
-                    </button>
-                  </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <ResultList title="Strengths" items={comparison.strengths} tone="green" />
+                  <ResultList title="Gaps" items={comparison.gaps} tone="amber" />
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <SkillPanel title="Matched Skills" skills={comparison.matchedSkills} />
+                  <SkillPanel title="Missing Skills" skills={comparison.missingSkills} muted />
+                </div>
+
+                <div className="rounded-lg border border-slate-800 bg-slate-950 p-5">
+                  <h3 className="text-lg font-semibold text-white">Suggested Interview Questions</h3>
+                  <ol className="mt-4 space-y-3">
+                    {comparison.interviewQuestions.map((question, index) => (
+                      <li key={question} className="flex gap-3 text-sm leading-6 text-slate-300">
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-800 text-xs font-semibold text-cyan-300">
+                          {index + 1}
+                        </span>
+                        <span>{question}</span>
+                      </li>
+                    ))}
+                  </ol>
                 </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function ResultList({
+  title,
+  items,
+  tone,
+}: {
+  title: string;
+  items: string[];
+  tone: 'green' | 'amber';
+}) {
+  const toneClass = tone === 'green' ? 'border-emerald-800 text-emerald-200' : 'border-amber-800 text-amber-200';
+
+  return (
+    <div className={`rounded-lg border bg-slate-950 p-5 ${toneClass}`}>
+      <h3 className="text-lg font-semibold text-white">{title}</h3>
+      <ul className="mt-4 space-y-3">
+        {items.length ? (
+          items.map((item) => (
+            <li key={item} className="text-sm leading-6 text-slate-300">
+              {item}
+            </li>
+          ))
+        ) : (
+          <li className="text-sm text-slate-500">No items returned.</li>
+        )}
+      </ul>
+    </div>
+  );
+}
+
+function SkillPanel({
+  title,
+  skills,
+  muted = false,
+}: {
+  title: string;
+  skills: string[];
+  muted?: boolean;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-950 p-5">
+      <h3 className="text-lg font-semibold text-white">{title}</h3>
+      <div className="mt-4 flex flex-wrap gap-2">
+        {skills.length ? (
+          skills.map((skill) => (
+            <span
+              key={skill}
+              className={`rounded-full border px-3 py-1 text-sm ${
+                muted
+                  ? 'border-slate-700 bg-slate-900 text-slate-300'
+                  : 'border-cyan-800 bg-cyan-950/60 text-cyan-200'
+              }`}
+            >
+              {skill}
+            </span>
+          ))
+        ) : (
+          <span className="text-sm text-slate-500">No skills returned.</span>
+        )}
       </div>
     </div>
   );

@@ -1,7 +1,145 @@
+'use server';
+
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import type { TextItem } from 'pdfjs-dist/types/src/display/api';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+
+type PdfPage = {
+  getTextContent: () => Promise<{ items: unknown[] }>;
+};
+
+type PdfDocument = {
+  numPages: number;
+  getPage: (pageNumber: number) => Promise<PdfPage>;
+};
+
+type PdfJsModule = {
+  GlobalWorkerOptions: {
+    workerSrc: string;
+  };
+  getDocument: (source: { data: ArrayBuffer }) => {
+    promise: Promise<PdfDocument>;
+  };
+};
+
+export interface ResumeComparison {
+  candidateName: string;
+  overallScore: number;
+  recommendation: string;
+  summary: string;
+  strengths: string[];
+  gaps: string[];
+  matchedSkills: string[];
+  missingSkills: string[];
+  interviewQuestions: string[];
+}
+
+export async function validateHrLogin(email: string, password: string): Promise<boolean> {
+  const allowedEmail = process.env.HR_EMAIL || 'hr@example.com';
+  const allowedPassword = process.env.HR_PASSWORD || 'password123';
+
+  return email.trim().toLowerCase() === allowedEmail.toLowerCase() && password === allowedPassword;
+}
+
+function getFallbackComparison(resumeContent: string, jobDescription: string): ResumeComparison {
+  const resumeWords = new Set(resumeContent.toLowerCase().match(/[a-z][a-z+#.-]{2,}/g) || []);
+  const jobWords = Array.from(new Set(jobDescription.toLowerCase().match(/[a-z][a-z+#.-]{2,}/g) || []));
+  const commonTerms = jobWords.filter((word) => resumeWords.has(word)).slice(0, 8);
+  const missingTerms = jobWords.filter((word) => !resumeWords.has(word)).slice(0, 8);
+  const score = Math.min(85, Math.max(35, Math.round((commonTerms.length / Math.max(jobWords.length, 1)) * 1000)));
+
+  return {
+    candidateName: 'Candidate',
+    overallScore: score,
+    recommendation: score >= 70 ? 'Strong match' : score >= 50 ? 'Potential match' : 'Needs review',
+    summary: 'AI comparison is unavailable, so this is a keyword-based estimate. Add a Gemini API key for a richer assessment.',
+    strengths: commonTerms.length
+      ? [`Resume includes relevant terms such as ${commonTerms.slice(0, 4).join(', ')}.`]
+      : ['Resume text was parsed successfully and is ready for review.'],
+    gaps: missingTerms.length
+      ? [`Job description mentions terms not clearly found in the resume, including ${missingTerms.slice(0, 4).join(', ')}.`]
+      : ['No obvious keyword gaps found in the fallback comparison.'],
+    matchedSkills: commonTerms,
+    missingSkills: missingTerms,
+    interviewQuestions: [
+      'Which experience best matches the most important requirement in this role?',
+      'Can you describe a project where you used the key skills listed in the job description?',
+      'What support would help you close any gaps for this position?',
+    ],
+  };
+}
+
+function parseComparisonResponse(text: string, resumeContent: string, jobDescription: string): ResumeComparison {
+  try {
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : text) as Partial<ResumeComparison>;
+
+    return {
+      candidateName: parsed.candidateName || 'Candidate',
+      overallScore: Math.max(0, Math.min(100, Number(parsed.overallScore) || 0)),
+      recommendation: parsed.recommendation || 'Needs review',
+      summary: parsed.summary || 'No summary provided.',
+      strengths: Array.isArray(parsed.strengths) ? parsed.strengths.slice(0, 6) : [],
+      gaps: Array.isArray(parsed.gaps) ? parsed.gaps.slice(0, 6) : [],
+      matchedSkills: Array.isArray(parsed.matchedSkills) ? parsed.matchedSkills.slice(0, 12) : [],
+      missingSkills: Array.isArray(parsed.missingSkills) ? parsed.missingSkills.slice(0, 12) : [],
+      interviewQuestions: Array.isArray(parsed.interviewQuestions) ? parsed.interviewQuestions.slice(0, 6) : [],
+    };
+  } catch (error) {
+    console.error('Error parsing comparison response:', error);
+    return getFallbackComparison(resumeContent, jobDescription);
+  }
+}
+
+export async function compareResumeToJob(
+  resumeContent: string,
+  jobDescription: string,
+): Promise<ResumeComparison> {
+  if (!resumeContent.trim()) {
+    throw new Error('Resume content is required.');
+  }
+
+  if (!jobDescription.trim()) {
+    throw new Error('Job description is required.');
+  }
+
+  try {
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+
+    const prompt = `You are an HR recruiting assistant. Compare this candidate resume against the job description. Return only valid JSON with this exact shape:
+{
+  "candidateName": "string",
+  "overallScore": number,
+  "recommendation": "Strong match | Potential match | Needs review | Not recommended",
+  "summary": "string",
+  "strengths": ["string"],
+  "gaps": ["string"],
+  "matchedSkills": ["string"],
+  "missingSkills": ["string"],
+  "interviewQuestions": ["string"]
+}
+
+Scoring rules:
+- 90-100: excellent fit across required skills and experience
+- 70-89: strong fit with minor gaps
+- 50-69: possible fit with meaningful gaps
+- below 50: weak fit
+
+Resume:
+${resumeContent.substring(0, 6000)}
+
+Job description:
+${jobDescription.substring(0, 4000)}`;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    return parseComparisonResponse(response.text().trim(), resumeContent, jobDescription);
+  } catch (error) {
+    console.error('Error comparing resume to job:', error);
+    return getFallbackComparison(resumeContent, jobDescription);
+  }
+}
 
 export async function generateResumeSummary(resumeContent: string): Promise<string> {
   try {
@@ -24,9 +162,7 @@ ${resumeContent.substring(0, 3000)}`; // Limit to first 3000 chars
 
 export async function parseResume(file: File): Promise<string> {
   try {
-    // Dynamically import the legacy browser build of pdfjs-dist
-    // @ts-ignore
-    const pdfjsLib = (await import('pdfjs-dist/legacy/build/pdf.mjs')) as any;
+    const pdfjsLib = (await import('pdfjs-dist/legacy/build/pdf.mjs')) as unknown as PdfJsModule;
 
     // Set the worker source to the local public worker file
     if (typeof window !== 'undefined') {
@@ -41,8 +177,8 @@ export async function parseResume(file: File): Promise<string> {
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-      const pageText = (textContent.items as any[])
-        .filter((item: any): item is TextItem => 'str' in item)
+      const pageText = textContent.items
+        .filter((item): item is TextItem => typeof item === 'object' && item !== null && 'str' in item)
         .map((item) => item.str)
         .join(' ');
       fullText += pageText + '\n';
