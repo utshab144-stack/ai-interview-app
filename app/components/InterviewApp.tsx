@@ -4,7 +4,6 @@ import { useState } from 'react';
 import {
   compareResumeToJob,
   parseResume,
-  validateHrLogin,
   type ResumeComparison,
 } from '../actions';
 
@@ -25,7 +24,7 @@ export default function InterviewApp() {
     event.preventDefault();
     setLoginError('');
 
-    const isValid = await validateHrLogin(email, password);
+    const isValid = email.trim().toLowerCase() === 'hr@example.com' && password === 'password123';
     if (!isValid) {
       setLoginError('Invalid HR credentials. Try hr@example.com / password123 for local testing.');
       return;
