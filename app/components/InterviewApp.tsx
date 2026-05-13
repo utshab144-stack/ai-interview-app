@@ -3,9 +3,57 @@
 import { useState } from 'react';
 import {
   compareResumeToJob,
-  parseResume,
   type ResumeComparison,
 } from '../actions';
+
+type PdfTextItem = {
+  str: string;
+};
+
+type PdfPage = {
+  getTextContent: () => Promise<{ items: unknown[] }>;
+};
+
+type PdfDocument = {
+  numPages: number;
+  getPage: (pageNumber: number) => Promise<PdfPage>;
+};
+
+type PdfJsModule = {
+  GlobalWorkerOptions: {
+    workerSrc: string;
+  };
+  getDocument: (source: { data: ArrayBuffer }) => {
+    promise: Promise<PdfDocument>;
+  };
+};
+
+async function parseResumePdf(file: File): Promise<string> {
+  const pdfjsLib = (await import('pdfjs-dist/legacy/build/pdf.mjs')) as unknown as PdfJsModule;
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  let fullText = '';
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+    const page = await pdf.getPage(pageNumber);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items
+      .filter((item): item is PdfTextItem => typeof item === 'object' && item !== null && 'str' in item)
+      .map((item) => item.str)
+      .join(' ');
+    fullText += `${pageText}\n`;
+  }
+
+  const cleanedText = fullText.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
+
+  if (cleanedText.length < 50) {
+    throw new Error('The PDF contains very little readable text. Please upload a text-based resume PDF.');
+  }
+
+  return cleanedText;
+}
 
 export default function InterviewApp() {
   const [email, setEmail] = useState('');
@@ -56,7 +104,7 @@ export default function InterviewApp() {
     setIsParsingResume(true);
 
     try {
-      const content = await parseResume(file);
+      const content = await parseResumePdf(file);
       setResumeContent(content);
     } catch (uploadError) {
       const message = uploadError instanceof Error ? uploadError.message : 'Unable to parse this resume.';
